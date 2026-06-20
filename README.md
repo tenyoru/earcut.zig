@@ -24,8 +24,19 @@ exe.root_module.addImport("earcut", earcut.module("earcut"));
 const earcut = @import("earcut");
 
 const indices = try earcut.earcut(allocator, &vertices, null, 2);
+defer allocator.free(indices);
+
 // with holes:
 const indices = try earcut.earcut(allocator, &vertices, &hole_indices, 2);
+defer allocator.free(indices);
+```
+
+## WASM
+
+Use `std.heap.wasm_allocator` — no other changes needed:
+
+```zig
+const indices = try earcut.earcut(std.heap.wasm_allocator, &vertices, null, 2);
 ```
 
 ## Credits
