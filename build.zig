@@ -4,21 +4,24 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("triangulation", .{
+    const earcut_mod = b.addModule("earcut", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const mod_tests = b.addTest(.{
+    const tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
+            .root_source_file = b.path("src/test/main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "earcut", .module = earcut_mod },
+            },
         }),
     });
 
-    const run_tests = b.addRunArtifact(mod_tests);
+    const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_tests.step);
 }
