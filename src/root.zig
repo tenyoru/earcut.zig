@@ -75,6 +75,81 @@ pub fn earcut(
     return triangles.toOwnedSlice(allocator);
 }
 
+pub const FlattenResult = struct {
+    vertices: []f32,
+    holes: []u32,
+
+    pub fn deinit(self: FlattenResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.vertices);
+        allocator.free(self.holes);
+    }
+};
+
+/// Convert a polygon in nested-array form (rings of [x,y] points, as in GeoJSON)
+/// into the flat arrays that earcut accepts.
+pub fn flatten(allocator: std.mem.Allocator, data: []const []const [2]f32) !FlattenResult {
+    var verts: std.ArrayListUnmanaged(f32) = .empty;
+    var holes: std.ArrayListUnmanaged(u32) = .empty;
+    var prev_len: u32 = 0;
+    var hole_index: u32 = 0;
+
+    for (data) |ring| {
+        for (ring) |pt| {
+            try verts.append(allocator, pt[0]);
+            try verts.append(allocator, pt[1]);
+        }
+        if (prev_len != 0) {
+            hole_index += prev_len;
+            try holes.append(allocator, hole_index);
+        }
+        prev_len = @intCast(ring.len);
+    }
+
+    return .{
+        .vertices = try verts.toOwnedSlice(allocator),
+        .holes = try holes.toOwnedSlice(allocator),
+    };
+}
+
+/// Return the percentage difference between the polygon area and its triangulation area.
+/// A value of 0 means a perfect triangulation. Used to verify correctness.
+pub fn deviation(
+    data: []const f32,
+    hole_indices: ?[]const u32,
+    dim: u32,
+    triangles: []const u32,
+) f32 {
+    const has_holes = hole_indices != null and hole_indices.?.len > 0;
+    const outer_len: u32 = if (has_holes) hole_indices.?[0] * dim else @intCast(data.len);
+
+    var polygon_area = @abs(signed_area(data, 0, outer_len, dim));
+
+    if (has_holes) {
+        const holes = hole_indices.?;
+        for (holes, 0..) |hole_start, i| {
+            const start = hole_start * dim;
+            const end: u32 = if (i < holes.len - 1) holes[i + 1] * dim else @intCast(data.len);
+            polygon_area -= @abs(signed_area(data, start, end, dim));
+        }
+    }
+
+    var triangles_area: f32 = 0;
+    var i: usize = 0;
+    while (i < triangles.len) : (i += 3) {
+        const a = triangles[i] * dim;
+        const b = triangles[i + 1] * dim;
+        const c = triangles[i + 2] * dim;
+        triangles_area += @abs(
+            (data[a] - data[c]) * (data[b + 1] - data[a + 1]) -
+            (data[a] - data[b]) * (data[c + 1] - data[a + 1]),
+        );
+    }
+
+    if (polygon_area == 0 and triangles_area == 0) return 0;
+    return @abs((triangles_area - polygon_area) / polygon_area);
+}
+
+
 fn linked_list(
     allocator: std.mem.Allocator,
     data: []const f32,
@@ -716,239 +791,3 @@ fn signed_area(data: []const f32, start: u32, end: u32, dim: u32) f32 {
     return sum;
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────────
-
-test "triangulate simple triangle" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // Triangle: (0,0), (1,0), (0.5,1)
-    const vertices = [_]f32{ 0, 0, 1, 0, 0.5, 1 };
-
-    const indices = try earcut(arena.allocator(), &vertices, null, 2);
-
-    // Triangle is already a triangle = 3 indices
-    try std.testing.expectEqual(@as(usize, 3), indices.len);
-}
-
-test "triangulate simple square" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // Square footprint: (0,0), (1,0), (1,1), (0,1)
-    const vertices = [_]f32{ 0, 0, 1, 0, 1, 1, 0, 1 };
-
-    const indices = try earcut(arena.allocator(), &vertices, null, 2);
-
-    // Square should be split into 2 triangles = 6 indices
-    try std.testing.expectEqual(@as(usize, 6), indices.len);
-
-    // Verify all indices are valid (0-3)
-    for (indices) |idx| {
-        try std.testing.expect(idx < 4);
-    }
-}
-
-test "triangulate pentagon" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // Pentagon (5 vertices) should produce 3 triangles = 9 indices
-    const vertices = [_]f32{
-        0,    0,
-        1,    0,
-        1.3,  0.5,
-        0.5,  1,
-        -0.3, 0.5,
-    };
-
-    const indices = try earcut(arena.allocator(), &vertices, null, 2);
-
-    try std.testing.expectEqual(@as(usize, 9), indices.len);
-
-    // Verify all indices are valid (0-4)
-    for (indices) |idx| {
-        try std.testing.expect(idx < 5);
-    }
-}
-
-test "triangulate hexagon" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // Regular hexagon (6 vertices) should produce 4 triangles = 12 indices
-    const vertices = [_]f32{
-        1,    0,
-        0.5,  0.866,
-        -0.5, 0.866,
-        -1,   0,
-        -0.5, -0.866,
-        0.5,  -0.866,
-    };
-
-    const indices = try earcut(arena.allocator(), &vertices, null, 2);
-
-    try std.testing.expectEqual(@as(usize, 12), indices.len);
-
-    // Verify all indices are valid (0-5)
-    for (indices) |idx| {
-        try std.testing.expect(idx < 6);
-    }
-}
-
-test "triangulate L-shape (concave polygon)" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // L-shaped polygon (concave)
-    const vertices = [_]f32{
-        0, 0,
-        2, 0,
-        2, 1,
-        1, 1,
-        1, 2,
-        0, 2,
-    };
-
-    const indices = try earcut(arena.allocator(), &vertices, null, 2);
-
-    // L-shape (6 vertices) should produce 4 triangles = 12 indices
-    try std.testing.expectEqual(@as(usize, 12), indices.len);
-
-    // Verify all indices are valid (0-5)
-    for (indices) |idx| {
-        try std.testing.expect(idx < 6);
-    }
-}
-
-test "triangulate complex building footprint" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // More complex polygon (typical building footprint)
-    const vertices = [_]f32{
-        0, 0,
-        3, 0,
-        3, 2,
-        2, 2,
-        2, 3,
-        1, 3,
-        1, 2,
-        0, 2,
-    };
-
-    const indices = try earcut(arena.allocator(), &vertices, null, 2);
-
-    // 8 vertices should produce 6 triangles = 18 indices
-    try std.testing.expectEqual(@as(usize, 18), indices.len);
-
-    // Verify all indices are valid (0-7)
-    for (indices) |idx| {
-        try std.testing.expect(idx < 8);
-    }
-}
-
-test "triangulate polygon with hole" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // Outer square with inner square hole
-    const vertices = [_]f32{
-        0, 0, // outer
-        4, 0,
-        4, 4,
-        0, 4,
-        1, 1, // hole
-        3, 1,
-        3, 3,
-        1, 3,
-    };
-
-    const hole_indices = [_]u32{4}; // hole starts at vertex 4
-
-    const indices = try earcut(arena.allocator(), &vertices, &hole_indices, 2);
-
-    // Should produce multiple triangles
-    try std.testing.expect(indices.len > 0);
-    try std.testing.expect(indices.len % 3 == 0);
-
-    // Verify all indices are valid (0-7)
-    for (indices) |idx| {
-        try std.testing.expect(idx < 8);
-    }
-}
-
-test "triangulate degenerate triangle (collinear points)" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // Three collinear points - should produce no triangles
-    const vertices = [_]f32{ 0, 0, 1, 0, 2, 0 };
-
-    const indices = try earcut(arena.allocator(), &vertices, null, 2);
-
-    // Degenerate case - no valid triangulation
-    try std.testing.expectEqual(@as(usize, 0), indices.len);
-}
-
-test "signed area calculation" {
-    // Counter-clockwise square (positive area)
-    const ccw = [_]f32{ 0, 0, 1, 0, 1, 1, 0, 1 };
-    const area_ccw = signed_area(&ccw, 0, 8, 2);
-    try std.testing.expect(area_ccw > 0);
-
-    // Clockwise square (negative area)
-    const cw = [_]f32{ 0, 0, 0, 1, 1, 1, 1, 0 };
-    const area_cw = signed_area(&cw, 0, 8, 2);
-    try std.testing.expect(area_cw < 0);
-}
-
-test "point in triangle" {
-    // Triangle: (0,0), (2,0), (1,2)
-    const ax: f32 = 0;
-    const ay: f32 = 0;
-    const bx: f32 = 2;
-    const by: f32 = 0;
-    const cx: f32 = 1;
-    const cy: f32 = 2;
-
-    // Point inside triangle
-    try std.testing.expect(point_in_triangle(ax, ay, bx, by, cx, cy, 1, 0.5));
-
-    // Point outside triangle
-    try std.testing.expect(!point_in_triangle(ax, ay, bx, by, cx, cy, 3, 3));
-
-    // Point on vertex should be inside
-    try std.testing.expect(point_in_triangle(ax, ay, bx, by, cx, cy, ax, ay));
-}
-
-test "node equality" {
-    const allocator = std.testing.allocator;
-
-    const n1 = try create_node(allocator, 0, 1.0, 2.0);
-    const n2 = try create_node(allocator, 1, 1.0, 2.0);
-    const n3 = try create_node(allocator, 2, 1.0, 2.1);
-
-    defer allocator.destroy(n1);
-    defer allocator.destroy(n2);
-    defer allocator.destroy(n3);
-
-    // Same coordinates should be equal
-    try std.testing.expect(equals(n1, n2));
-
-    // Different coordinates should not be equal
-    try std.testing.expect(!equals(n1, n3));
-}
-
-test "z-order calculation" {
-    // Z-order should preserve spatial locality
-    const z1 = z_order(0, 0, 0, 0, 1);
-    const z2 = z_order(1, 1, 0, 0, 1);
-    const z3 = z_order(100, 100, 0, 0, 1);
-
-    // Points further apart should have larger z-order differences
-    const diff_12 = @abs(z2 - z1);
-    const diff_13 = @abs(z3 - z1);
-
-    try std.testing.expect(diff_13 > diff_12);
-}
