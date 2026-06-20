@@ -16,6 +16,11 @@ const Node = struct {
 };
 
 
+/// Triangulate a polygon given as a flat array of vertex coordinates.
+/// `data` is a flat `[]const f64` of `[x, y, x, y, ...]` pairs.
+/// `hole_indices` is a slice of vertex-index offsets where each hole starts, or null.
+/// `dim` is the number of coordinates per vertex (2 for 2D, 3 for 3D with z ignored).
+/// Returns a flat list of triangle vertex indices into `data`.
 pub fn earcut(
     allocator: std.mem.Allocator,
     data: []const f64,
@@ -80,8 +85,8 @@ pub const FlattenResult = struct {
     }
 };
 
-/// Convert a polygon in nested-array form (rings of [x,y] points, as in GeoJSON)
-/// into the flat arrays that earcut accepts.
+/// Turn a polygon in nested-array form (rings of [x,y] points, as in GeoJSON)
+/// into the flat arrays that `earcut` accepts.
 pub fn flatten(allocator: std.mem.Allocator, data: []const []const [2]f64) !FlattenResult {
     var verts: std.ArrayListUnmanaged(f64) = .empty;
     var holes: std.ArrayListUnmanaged(u32) = .empty;
@@ -107,7 +112,7 @@ pub fn flatten(allocator: std.mem.Allocator, data: []const []const [2]f64) !Flat
 }
 
 /// Return the percentage difference between the polygon area and its triangulation area.
-/// A value of 0 means a perfect triangulation. Used to verify correctness.
+/// A value of 0 means a perfect triangulation.
 pub fn deviation(
     data: []const f64,
     hole_indices: ?[]const u32,
