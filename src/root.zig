@@ -5,8 +5,8 @@ const std = @import("std");
 
 const Node = struct {
     i: u32,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
     prev: ?*Node = null,
     next: ?*Node = null,
     z: i32 = 0,
@@ -18,26 +18,30 @@ const Node = struct {
 
 pub fn earcut(
     allocator: std.mem.Allocator,
-    data: []const f32,
+    data: []const f64,
     hole_indices: ?[]const u32,
     dim: u32,
 ) ![]u32 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
     const has_holes = hole_indices != null and hole_indices.?.len > 0;
     const outer_len: u32 = if (has_holes) hole_indices.?[0] * dim else @intCast(data.len);
 
-    var outer_node = try linked_list(allocator, data, 0, outer_len, dim, true);
+    var outer_node = try linked_list(a, data, 0, outer_len, dim, true);
     var triangles: std.ArrayListUnmanaged(u32) = .empty;
 
     if (outer_node == null or outer_node.?.next == outer_node.?.prev) {
-        return triangles.toOwnedSlice(allocator);
+        return allocator.dupe(u32, triangles.items);
     }
 
-    var min_x: f32 = undefined;
-    var min_y: f32 = undefined;
-    var inv_size: f32 = undefined;
+    var min_x: f64 = undefined;
+    var min_y: f64 = undefined;
+    var inv_size: f64 = undefined;
 
     if (has_holes) {
-        outer_node = try eliminate_holes(allocator, data, hole_indices.?, outer_node.?, dim);
+        outer_node = try eliminate_holes(a, data, hole_indices.?, outer_node.?, dim);
     }
 
     // If shape is not too simple, use z-order curve hash
@@ -61,13 +65,13 @@ pub fn earcut(
         inv_size = if (inv_size != 0) 32767.0 / inv_size else 0;
     }
 
-    try earcut_linked(allocator, outer_node, &triangles, dim, min_x, min_y, inv_size, 0);
+    try earcut_linked(a, outer_node, &triangles, dim, min_x, min_y, inv_size, 0);
 
-    return triangles.toOwnedSlice(allocator);
+    return allocator.dupe(u32, triangles.items);
 }
 
 pub const FlattenResult = struct {
-    vertices: []f32,
+    vertices: []f64,
     holes: []u32,
 
     pub fn deinit(self: FlattenResult, allocator: std.mem.Allocator) void {
@@ -78,8 +82,8 @@ pub const FlattenResult = struct {
 
 /// Convert a polygon in nested-array form (rings of [x,y] points, as in GeoJSON)
 /// into the flat arrays that earcut accepts.
-pub fn flatten(allocator: std.mem.Allocator, data: []const []const [2]f32) !FlattenResult {
-    var verts: std.ArrayListUnmanaged(f32) = .empty;
+pub fn flatten(allocator: std.mem.Allocator, data: []const []const [2]f64) !FlattenResult {
+    var verts: std.ArrayListUnmanaged(f64) = .empty;
     var holes: std.ArrayListUnmanaged(u32) = .empty;
     var prev_len: u32 = 0;
     var hole_index: u32 = 0;
@@ -105,11 +109,11 @@ pub fn flatten(allocator: std.mem.Allocator, data: []const []const [2]f32) !Flat
 /// Return the percentage difference between the polygon area and its triangulation area.
 /// A value of 0 means a perfect triangulation. Used to verify correctness.
 pub fn deviation(
-    data: []const f32,
+    data: []const f64,
     hole_indices: ?[]const u32,
     dim: u32,
     triangles: []const u32,
-) f32 {
+) f64 {
     const has_holes = hole_indices != null and hole_indices.?.len > 0;
     const outer_len: u32 = if (has_holes) hole_indices.?[0] * dim else @intCast(data.len);
 
@@ -124,7 +128,7 @@ pub fn deviation(
         }
     }
 
-    var triangles_area: f32 = 0;
+    var triangles_area: f64 = 0;
     var i: usize = 0;
     while (i < triangles.len) : (i += 3) {
         const a = triangles[i] * dim;
@@ -143,7 +147,7 @@ pub fn deviation(
 
 fn linked_list(
     allocator: std.mem.Allocator,
-    data: []const f32,
+    data: []const f64,
     start: u32,
     end: u32,
     dim: u32,
@@ -178,9 +182,9 @@ fn earcut_linked(
     ear_opt: ?*Node,
     triangles: *std.ArrayListUnmanaged(u32),
     dim: u32,
-    min_x: f32,
-    min_y: f32,
-    inv_size: f32,
+    min_x: f64,
+    min_y: f64,
+    inv_size: f64,
     pass: u32,
 ) std.mem.Allocator.Error!void {
     if (ear_opt == null) return;
@@ -259,7 +263,7 @@ fn is_ear(ear: *Node) bool {
     return true;
 }
 
-fn is_ear_hashed(ear: *Node, min_x: f32, min_y: f32, inv_size: f32) bool {
+fn is_ear_hashed(ear: *Node, min_x: f64, min_y: f64, inv_size: f64) bool {
     const a = ear.prev.?;
     const b = ear;
     const c = ear.next.?;
@@ -356,9 +360,9 @@ fn split_earcut(
     start: *Node,
     triangles: *std.ArrayListUnmanaged(u32),
     dim: u32,
-    min_x: f32,
-    min_y: f32,
-    inv_size: f32,
+    min_x: f64,
+    min_y: f64,
+    inv_size: f64,
 ) !void {
     var a = start;
 
@@ -383,7 +387,7 @@ fn split_earcut(
 
 fn eliminate_holes(
     allocator: std.mem.Allocator,
-    data: []const f32,
+    data: []const f64,
     hole_indices: []const u32,
     outer_node: *Node,
     dim: u32,
@@ -431,7 +435,7 @@ fn find_hole_bridge(hole: *Node, outer_node: *Node) ?*Node {
     var p = outer_node;
     const hx = hole.x;
     const hy = hole.y;
-    var qx: f32 = -std.math.inf(f32);
+    var qx: f64 = -std.math.inf(f64);
     var m: ?*Node = null;
 
     if (equals(hole, p)) return p;
@@ -452,7 +456,7 @@ fn find_hole_bridge(hole: *Node, outer_node: *Node) ?*Node {
     if (m == null) return null;
 
     const stop = m.?;
-    var tan_min: f32 = std.math.inf(f32);
+    var tan_min: f64 = std.math.inf(f64);
 
     p = m.?;
     while (true) {
@@ -478,7 +482,7 @@ fn sector_contains_sector(m: *Node, p: *Node) bool {
     return area(m.prev.?, m, p.prev.?) < 0 and area(p.next.?, m, m.next.?) < 0;
 }
 
-fn index_curve(start: *Node, min_x: f32, min_y: f32, inv_size: f32) void {
+fn index_curve(start: *Node, min_x: f64, min_y: f64, inv_size: f64) void {
     var p = start;
 
     while (true) {
@@ -549,7 +553,7 @@ fn sort_linked(list_start: *Node) void {
     }
 }
 
-fn z_order(x_val: f32, y_val: f32, min_x: f32, min_y: f32, inv_size: f32) i32 {
+fn z_order(x_val: f64, y_val: f64, min_x: f64, min_y: f64, inv_size: f64) i32 {
     var x: i32 = @intFromFloat((x_val - min_x) * inv_size);
     var y: i32 = @intFromFloat((y_val - min_y) * inv_size);
 
@@ -581,13 +585,13 @@ fn get_leftmost(start: *Node) *Node {
     return leftmost;
 }
 
-fn point_in_triangle(ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32, px: f32, py: f32) bool {
+fn point_in_triangle(ax: f64, ay: f64, bx: f64, by: f64, cx: f64, cy: f64, px: f64, py: f64) bool {
     return (cx - px) * (ay - py) >= (ax - px) * (cy - py) and
         (ax - px) * (by - py) >= (bx - px) * (ay - py) and
         (bx - px) * (cy - py) >= (cx - px) * (by - py);
 }
 
-fn point_in_triangle_except_first(ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32, px: f32, py: f32) bool {
+fn point_in_triangle_except_first(ax: f64, ay: f64, bx: f64, by: f64, cx: f64, cy: f64, px: f64, py: f64) bool {
     return !(ax == px and ay == py) and point_in_triangle(ax, ay, bx, by, cx, cy, px, py);
 }
 
@@ -598,7 +602,7 @@ fn is_valid_diagonal(a: *Node, b: *Node) bool {
             equals(a, b) and area(a.prev.?, a, a.next.?) > 0 and area(b.prev.?, b, b.next.?) > 0);
 }
 
-fn area(p: *Node, q: *Node, r: *Node) f32 {
+fn area(p: *Node, q: *Node, r: *Node) f64 {
     return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
 }
 
@@ -627,7 +631,7 @@ fn on_segment(p: *Node, q: *Node, r: *Node) bool {
         q.y <= @max(p.y, r.y) and q.y >= @min(p.y, r.y);
 }
 
-fn sign(num: f32) i32 {
+fn sign(num: f64) i32 {
     if (num > 0) return 1;
     if (num < 0) return -1;
     return 0;
@@ -710,7 +714,7 @@ fn split_polygon_simple(a: *Node, b: *Node) *Node {
     return an;
 }
 
-fn insert_node(allocator: std.mem.Allocator, i: u32, x: f32, y: f32, last: ?*Node) !*Node {
+fn insert_node(allocator: std.mem.Allocator, i: u32, x: f64, y: f64, last: ?*Node) !*Node {
     const p = try create_node(allocator, i, x, y);
 
     if (last == null) {
@@ -734,7 +738,7 @@ fn remove_node(p: *Node) void {
     if (p.nextz) |nz| nz.prevz = p.prevz;
 }
 
-fn create_node(allocator: std.mem.Allocator, i: u32, x: f32, y: f32) !*Node {
+fn create_node(allocator: std.mem.Allocator, i: u32, x: f64, y: f64) !*Node {
     const node = try allocator.create(Node);
     node.* = Node{
         .i = i,
@@ -769,8 +773,8 @@ fn filter_points(start_opt: ?*Node, end_opt: ?*Node) ?*Node {
     return end;
 }
 
-fn signed_area(data: []const f32, start: u32, end: u32, dim: u32) f32 {
-    var sum: f32 = 0;
+fn signed_area(data: []const f64, start: u32, end: u32, dim: u32) f64 {
+    var sum: f64 = 0;
     var i = start;
     var j = end - dim;
 
