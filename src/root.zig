@@ -15,15 +15,6 @@ const Node = struct {
     steiner: bool = false,
 };
 
-const Vec2 = @Vector(2, f32);
-
-inline fn v2(x: f32, y: f32) Vec2 {
-    return .{ x, y };
-}
-
-inline fn cross2(a: Vec2, b: Vec2) f32 {
-    return a[0] * b[1] - a[1] * b[0];
-}
 
 pub fn earcut(
     allocator: std.mem.Allocator,
@@ -421,7 +412,11 @@ fn eliminate_holes(
 }
 
 fn compare_x(_: void, a: *Node, b: *Node) bool {
-    return a.x < b.x;
+    if (a.x != b.x) return a.x < b.x;
+    if (a.y != b.y) return a.y < b.y;
+    const a_slope = (a.next.?.y - a.y) / (a.next.?.x - a.x);
+    const b_slope = (b.next.?.y - b.y) / (b.next.?.x - b.x);
+    return a_slope < b_slope;
 }
 
 fn eliminate_hole(hole: *Node, outer_node: *Node) ?*Node {
@@ -439,7 +434,9 @@ fn find_hole_bridge(hole: *Node, outer_node: *Node) ?*Node {
     var qx: f32 = -std.math.inf(f32);
     var m: ?*Node = null;
 
+    if (equals(hole, p)) return p;
     while (true) {
+        if (equals(hole, p.next.?)) return p.next.?;
         if (hy <= p.y and hy >= p.next.?.y and p.next.?.y != p.y) {
             const x = p.x + (hy - p.y) * (p.next.?.x - p.x) / (p.next.?.y - p.y);
             if (x <= hx and x > qx) {
@@ -602,9 +599,7 @@ fn is_valid_diagonal(a: *Node, b: *Node) bool {
 }
 
 fn area(p: *Node, q: *Node, r: *Node) f32 {
-    const qp = v2(q.x - p.x, q.y - p.y);
-    const rq = v2(r.x - q.x, r.y - q.y);
-    return -cross2(qp, rq);
+    return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
 }
 
 fn equals(p1: *Node, p2: *Node) bool {
@@ -780,11 +775,7 @@ fn signed_area(data: []const f32, start: u32, end: u32, dim: u32) f32 {
     var j = end - dim;
 
     while (i < end) : (i += dim) {
-        const vi = v2(data[i], data[i + 1]);
-        const vj = v2(data[j], data[j + 1]);
-        const d = vj - vi;
-        const s = vi + vj;
-        sum += d[0] * s[1];
+        sum += (data[j] - data[i]) * (data[i + 1] + data[j + 1]);
         j = i;
     }
 
