@@ -1,5 +1,7 @@
 # earcut.zig
 
+![Zig](https://img.shields.io/badge/zig-0.16.0-orange)
+
 Zig port of [mapbox/earcut](https://github.com/mapbox/earcut) — a fast polygon triangulation algorithm. Takes a flat vertex array and returns triangle indices. Supports concave polygons and holes.
 
 ## Install
