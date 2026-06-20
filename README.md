@@ -11,11 +11,11 @@ zig fetch --save https://github.com/tenyoru/earcut.zig/archive/refs/heads/main.t
 `build.zig`:
 
 ```zig
-const earcut = b.dependency("triangulation_zig", .{
+const earcut = b.dependency("earcut", .{
     .target = target,
     .optimize = optimize,
 });
-exe.root_module.addImport("earcut", earcut.module("triangulation"));
+exe.root_module.addImport("earcut", earcut.module("earcut"));
 ```
 
 ## Usage
