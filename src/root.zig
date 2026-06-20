@@ -772,6 +772,7 @@ fn filter_points(start_opt: ?*Node, end_opt: ?*Node) ?*Node {
 }
 
 fn signed_area(data: []const f64, start: u32, end: u32, dim: u32) f64 {
+    if (end <= start) return 0;
     var sum: f64 = 0;
     var i = start;
     var j = end - dim;

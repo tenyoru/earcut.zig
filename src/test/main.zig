@@ -1,6 +1,10 @@
 const std = @import("std");
 const earcut = @import("earcut").earcut;
 
+comptime {
+    _ = @import("earcut.zig");
+}
+
 fn numVal(v: std.json.Value) f64 {
     return switch (v) {
         .integer => |i| @floatFromInt(i),
