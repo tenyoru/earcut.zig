@@ -1,7 +1,7 @@
 .{
     .name = .earcut,
     .version = "0.0.0",
-    .fingerprint = 0x40175af196f20cc6,
+    .fingerprint = 0xc32e444ff516bff4,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
