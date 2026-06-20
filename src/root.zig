@@ -329,9 +329,9 @@ fn is_ear_hashed(ear: *Node, min_x: f64, min_y: f64, inv_size: f64) bool {
     return true;
 }
 
-fn cure_local_intersections(allocator: std.mem.Allocator, start: *Node, triangles: *std.ArrayListUnmanaged(u32)) *Node {
-    var p = start;
-    var result = start;
+fn cure_local_intersections(allocator: std.mem.Allocator, start_node: *Node, triangles: *std.ArrayListUnmanaged(u32)) *Node {
+    var p = start_node;
+    var loop_start = start_node;
 
     while (true) {
         const a = p.prev.?;
@@ -346,13 +346,13 @@ fn cure_local_intersections(allocator: std.mem.Allocator, start: *Node, triangle
             remove_node(p.next.?);
 
             p = b;
-            result = b;
+            loop_start = b;
         }
         p = p.next.?;
-        if (p == start) break;
+        if (p == loop_start) break;
     }
 
-    return filter_points(result, null).?;
+    return filter_points(p, null).?;
 }
 
 fn split_earcut(
@@ -409,7 +409,7 @@ fn eliminate_holes(
 
     var result = outer_node;
     for (queue.items) |hole| {
-        result = eliminate_hole(hole, result).?;
+        result = (try eliminate_hole(allocator, hole, result)).?;
     }
 
     return result;
@@ -423,9 +423,9 @@ fn compare_x(_: void, a: *Node, b: *Node) bool {
     return a_slope < b_slope;
 }
 
-fn eliminate_hole(hole: *Node, outer_node: *Node) ?*Node {
+fn eliminate_hole(allocator: std.mem.Allocator, hole: *Node, outer_node: *Node) !?*Node {
     const bridge = find_hole_bridge(hole, outer_node) orelse return outer_node;
-    const bridge_reverse = split_polygon_simple(bridge, hole);
+    const bridge_reverse = try split_polygon(allocator, bridge, hole);
 
     _ = filter_points(bridge_reverse, bridge_reverse.next);
     return filter_points(bridge, bridge.next);
@@ -456,12 +456,14 @@ fn find_hole_bridge(hole: *Node, outer_node: *Node) ?*Node {
     if (m == null) return null;
 
     const stop = m.?;
+    const mx = m.?.x;
+    const my = m.?.y;
     var tan_min: f64 = std.math.inf(f64);
 
     p = m.?;
     while (true) {
-        if (hx >= p.x and p.x >= m.?.x and hx != p.x and
-            point_in_triangle(if (hy < m.?.y) hx else qx, hy, m.?.x, m.?.y, if (hy < m.?.y) qx else hx, hy, p.x, p.y))
+        if (hx >= p.x and p.x >= mx and hx != p.x and
+            point_in_triangle(if (hy < my) hx else qx, hy, mx, my, if (hy < my) qx else hx, hy, p.x, p.y))
         {
             const tan = @abs(hy - p.y) / (hx - p.x);
 
@@ -501,9 +503,11 @@ fn index_curve(start: *Node, min_x: f64, min_y: f64, inv_size: f64) void {
 
 fn sort_linked(list_start: *Node) void {
     var in_size: u32 = 1;
+    var head: ?*Node = list_start;
 
     while (true) {
-        var p: ?*Node = list_start;
+        var p = head;
+        head = null;
         var list: ?*Node = null;
         var tail: ?*Node = null;
         var num_merges: u32 = 0;
@@ -547,6 +551,7 @@ fn sort_linked(list_start: *Node) void {
         }
 
         tail.?.nextz = null;
+        head = list;
         in_size *= 2;
 
         if (num_merges <= 1) break;
@@ -701,18 +706,6 @@ fn split_polygon(allocator: std.mem.Allocator, a: *Node, b: *Node) !*Node {
     return b2;
 }
 
-fn split_polygon_simple(a: *Node, b: *Node) *Node {
-    var an = a.next.?;
-    var bp = b.prev.?;
-
-    a.next = b;
-    b.prev = a;
-
-    bp.next = an;
-    an.prev = bp;
-
-    return an;
-}
 
 fn insert_node(allocator: std.mem.Allocator, i: u32, x: f64, y: f64, last: ?*Node) !*Node {
     const p = try create_node(allocator, i, x, y);
