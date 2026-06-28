@@ -47,6 +47,8 @@ pub fn earcut(
 
     if (has_holes) {
         outer_node = try eliminate_holes(a, data, hole_indices.?, outer_node.?, dim);
+        // collapse collinear/coincident points across the whole merged ring once before clipping
+        outer_node = filter_points(outer_node, null);
     }
 
     // If shape is not too simple, use z-order curve hash
@@ -215,8 +217,8 @@ fn earcut_linked(
 
             remove_node(ear);
 
-            ear = next.next.?;
-            stop = next.next.?;
+            ear = next;
+            stop = next;
             continue;
         }
 
@@ -337,12 +339,13 @@ fn is_ear_hashed(ear: *Node, min_x: f64, min_y: f64, inv_size: f64) bool {
 fn cure_local_intersections(allocator: std.mem.Allocator, start_node: *Node, triangles: *std.ArrayListUnmanaged(u32)) *Node {
     var p = start_node;
     var loop_start = start_node;
+    var cured = false;
 
     while (true) {
         const a = p.prev.?;
         const b = p.next.?.next.?;
 
-        if (!equals(a, b) and intersects(a, p, p.next.?, b) and locally_inside(a, b) and locally_inside(b, a)) {
+        if (intersects(a, p, p.next.?, b, false) and locally_inside(a, b) and locally_inside(b, a)) {
             triangles.append(allocator, a.i) catch {};
             triangles.append(allocator, p.i) catch {};
             triangles.append(allocator, b.i) catch {};
@@ -352,12 +355,13 @@ fn cure_local_intersections(allocator: std.mem.Allocator, start_node: *Node, tri
 
             p = b;
             loop_start = b;
+            cured = true;
         }
         p = p.next.?;
         if (p == loop_start) break;
     }
 
-    return filter_points(p, null).?;
+    return if (cured) filter_points(p, null).? else p;
 }
 
 fn split_earcut(
@@ -472,7 +476,7 @@ fn find_hole_bridge(hole: *Node, outer_node: *Node) ?*Node {
         {
             const tan = @abs(hy - p.y) / (hx - p.x);
 
-            if (locally_inside(p, hole) and (tan < tan_min or (tan == tan_min and (p.x > m.?.x or (p.x == m.?.x and sector_contains_sector(m.?, p)))))) {
+            if ((locally_inside(p, hole) or (p.y == hy and p.next.?.y == hy and p.next.?.x > hx)) and (tan < tan_min or (tan == tan_min and (p.x > m.?.x or (p.x == m.?.x and sector_contains_sector(m.?, p)))))) {
                 m = p;
                 tan_min = tan;
             }
@@ -606,7 +610,7 @@ fn point_in_triangle_except_first(ax: f64, ay: f64, bx: f64, by: f64, cx: f64, c
 }
 
 fn is_valid_diagonal(a: *Node, b: *Node) bool {
-    return a.next.?.i != b.i and a.prev.?.i != b.i and !intersects_polygon(a, b) and
+    return a.next.?.i != b.i and !intersects_polygon(a, b) and
         (locally_inside(a, b) and locally_inside(b, a) and middle_inside(a, b) and
             (area(a.prev.?, a, b.prev.?) != 0 or area(a, b.prev.?, b) != 0) or
             equals(a, b) and area(a.prev.?, a, a.next.?) > 0 and area(b.prev.?, b, b.next.?) > 0);
@@ -620,13 +624,15 @@ fn equals(p1: *Node, p2: *Node) bool {
     return p1.x == p2.x and p1.y == p2.y;
 }
 
-fn intersects(p1: *Node, q1: *Node, p2: *Node, q2: *Node) bool {
-    const o1 = sign(area(p1, q1, p2));
-    const o2 = sign(area(p1, q1, q2));
-    const o3 = sign(area(p2, q2, p1));
-    const o4 = sign(area(p2, q2, q1));
+fn intersects(p1: *Node, q1: *Node, p2: *Node, q2: *Node, include_boundary: bool) bool {
+    const o1 = area(p1, q1, p2);
+    const o2 = area(p1, q1, q2);
+    const o3 = area(p2, q2, p1);
+    const o4 = area(p2, q2, q1);
 
-    if (o1 != o2 and o3 != o4) return true;
+    if (((o1 > 0 and o2 < 0) or (o1 < 0 and o2 > 0)) and ((o3 > 0 and o4 < 0) or (o3 < 0 and o4 > 0))) return true;
+
+    if (!include_boundary) return false;
 
     if (o1 == 0 and on_segment(p1, p2, q1)) return true;
     if (o2 == 0 and on_segment(p1, q2, q1)) return true;
@@ -641,22 +647,31 @@ fn on_segment(p: *Node, q: *Node, r: *Node) bool {
         q.y <= @max(p.y, r.y) and q.y >= @min(p.y, r.y);
 }
 
-fn sign(num: f64) i32 {
-    if (num > 0) return 1;
-    if (num < 0) return -1;
-    return 0;
-}
-
 fn intersects_polygon(a: *Node, b: *Node) bool {
+    // diagonal bbox; an edge whose bbox can't overlap it can't intersect it, so
+    // skip the orientation test for those (the common case — the diagonal is short)
+    const min_x = @min(a.x, b.x);
+    const max_x = @max(a.x, b.x);
+    const min_y = @min(a.y, b.y);
+    const max_y = @max(a.y, b.y);
+
     var p = a;
 
     while (true) {
-        if (p.i != a.i and p.next.?.i != a.i and p.i != b.i and p.next.?.i != b.i and
-            intersects(p, p.next.?, a, b))
+        const n = p.next.?;
+        if ((p.x > max_x and n.x > max_x) or (p.x < min_x and n.x < min_x) or
+            (p.y > max_y and n.y > max_y) or (p.y < min_y and n.y < min_y))
+        {
+            p = n;
+            if (p == a) break;
+            continue;
+        }
+        if (p.i != a.i and n.i != a.i and p.i != b.i and n.i != b.i and
+            intersects(p, n, a, b, true))
         {
             return true;
         }
-        p = p.next.?;
+        p = n;
         if (p == a) break;
     }
 
@@ -747,25 +762,27 @@ fn create_node(allocator: std.mem.Allocator, i: u32, x: f64, y: f64) !*Node {
 }
 
 fn filter_points(start_opt: ?*Node, end_opt: ?*Node) ?*Node {
-    if (start_opt == null) return null;
-    const start = start_opt.?;
+    const start = start_opt orelse return null;
     var end = end_opt orelse start;
+    const full = end == start;
 
     var p = start;
-    var again = true;
+    var again = false;
 
-    while (again or p != end) {
+    while (true) {
         again = false;
 
-        if (!p.steiner and (equals(p, p.next.?) or area(p.prev.?, p, p.next.?) == 0)) {
+        if (p != p.next.? and !p.steiner and (equals(p, p.next.?) or area(p.prev.?, p, p.next.?) == 0)) {
+            if (full or p == end) end = p.prev.?;
             remove_node(p);
             p = p.prev.?;
-            end = p;
-            if (p == p.next) break;
             again = true;
-        } else {
+        } else if (full or p != end) {
             p = p.next.?;
+            again = !full;
         }
+
+        if (!(again or p != end)) break;
     }
 
     return end;
